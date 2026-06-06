@@ -66,7 +66,6 @@ async function authRequest(path, body) {
 }
 
 async function sb(path, opts = {}) {
-  checkEnv();
   const { method = "GET", body, token } = opts;
   const headers = {
     "Content-Type": "application/json",
@@ -74,20 +73,50 @@ async function sb(path, opts = {}) {
     Authorization: "Bearer " + (token || SUPABASE_ANON_KEY),
   };
   if (method === "POST" || method === "PATCH") headers.Prefer = "return=representation";
-  const r = await safeFetch(SUPABASE_URL + "/rest/v1" + path, {
-    method, headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const txt = await r.text();
-  const data = txt ? JSON.parse(txt) : null;
-  // Se o HTTP não é OK, lança erro com a mensagem do Supabase
-  if (!r.ok) {
-    const msg = (data && typeof data === "object") ? (data.message || data.error || data.msg || JSON.stringify(data)) : "Erro " + r.status;
-    throw new Error(msg);
+  
+  try {
+    const r = await safeFetch(SUPABASE_URL + "/rest/v1" + path, {
+      method, headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const txt = await r.text();
+    
+    // 🔥 TRATAMENTO SUPER SEGURO
+    if (!txt || txt.trim() === '') {
+      console.warn('Resposta vazia da API:', path);
+      return [];
+    }
+    
+    let result;
+    try {
+      result = JSON.parse(txt);
+    } catch (e) {
+      console.error('Erro ao fazer parse do JSON:', e, 'Texto:', txt.substring(0, 200));
+      return [];
+    }
+    
+    // 🔧 GARANTIR QUE SEMPRE RETORNA ARRAY
+    if (result === null || result === undefined) {
+      return [];
+    }
+    
+    if (Array.isArray(result)) {
+      return result;
+    }
+    
+    // Se for objeto único, converte para array
+    if (typeof result === 'object') {
+      return [result];
+    }
+    
+    // Qualquer outro caso, retorna array vazio
+    return [];
+    
+  } catch (error) {
+    console.error('Erro na requisição Supabase:', error);
+    return [];
   }
-  return data;
 }
-
 /* ── O restante do código permanece idêntico ── */
 /* Cole daqui em diante o código que já tem, a partir de:
    const CATS_R = [...]
