@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -45,7 +45,12 @@ async function sb(path, opts = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const txt = await r.text();
-  return txt ? JSON.parse(txt) : null;
+  const result = txt ? JSON.parse(txt) : null;
+  
+  // 🔧 CORREÇÃO CRÍTICA: Garantir que sempre retorna array quando aplicável
+  if (result === null) return [];
+  if (Array.isArray(result)) return result;
+  return [result]; // Se for objeto único, converte para array
 }
 
 /* ── Constants ── */
@@ -195,6 +200,19 @@ function Dashboard({ session, onLogout }) {
 
   function toast(m) { setToastMsg(m); setTimeout(() => setToastMsg(""), 3000); }
 
+  // 🔧 CORREÇÃO: Garantir que lanc sempre será array
+  const safeLanc = useMemo(() => {
+    if (!lanc) return [];
+    if (!Array.isArray(lanc)) return [];
+    return lanc;
+  }, [lanc]);
+
+  const safeMetas = useMemo(() => {
+    if (!metas) return [];
+    if (!Array.isArray(metas)) return [];
+    return metas;
+  }, [metas]);
+
   useEffect(() => {
     if (!token) return;
     setLoading(true);
@@ -202,17 +220,21 @@ function Dashboard({ session, onLogout }) {
       sb("/lancamentos?order=data.desc", { token }),
       sb("/metas?order=id.asc", { token }),
     ]).then(([ls, ms]) => {
-      // 🔧 CORREÇÃO: Garantir que ls e ms sejam arrays
       setLanc(Array.isArray(ls) ? ls : []);
       if (!ms || ms.length === 0 || !Array.isArray(ms)) {
-        sb("/metas", { method: "POST", token, body: METAS_DEF.map((m) => ({ ...m, user_id: uid })) }).then((d) => setMetas(Array.isArray(d) ? d : [])).catch(() => {});
-      } else setMetas(ms);
-    }).catch((e) => toast("Erro: " + e.message)).finally(() => setLoading(false));
+        sb("/metas", { method: "POST", token, body: METAS_DEF.map((m) => ({ ...m, user_id: uid })) })
+          .then((d) => setMetas(Array.isArray(d) ? d : []))
+          .catch(() => {});
+      } else {
+        setMetas(Array.isArray(ms) ? ms : []);
+      }
+    }).catch((e) => toast("Erro: " + e.message))
+      .finally(() => setLoading(false));
   }, [token, uid]);
 
-  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .filter()
-  const rec = Array.isArray(lanc) ? lanc.filter((l) => l.tipo === "receita") : [];
-  const desp = Array.isArray(lanc) ? lanc.filter((l) => l.tipo === "despesa") : [];
+  // 🔧 CORREÇÃO: Usar safeLanc em vez de lanc diretamente
+  const rec = safeLanc.filter((l) => l.tipo === "receita");
+  const desp = safeLanc.filter((l) => l.tipo === "despesa");
   const tR = rec.reduce((s, l) => s + Number(l.valor), 0);
   const tD = desp.reduce((s, l) => s + Number(l.valor), 0);
   const saldo = tR - tD;
@@ -226,36 +248,58 @@ function Dashboard({ session, onLogout }) {
   const dC = tR > 0 ? rF / tR : 0;
   const cFx = tR > 0 ? dF / tR : 0;
   
-  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .map()
-  const meses = Array.isArray(lanc) ? [...new Set(lanc.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse() : [];
+  const meses = [...new Set(safeLanc.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse();
   
-  // 🔧 CORREÇÃO: Garantir que lanc é array antes de filtrar
-  const lF = Array.isArray(lanc) && filtro ? lanc.filter((l) => l.data?.startsWith(filtro)) : (Array.isArray(lanc) ? lanc : []);
+  let lF = safeLanc;
+  if (filtro) {
+    lF = safeLanc.filter((l) => l.data?.startsWith(filtro));
+  }
+  
   const sP = lF.reduce((s, l) => (l.tipo === "receita" ? s + Number(l.valor) : s - Number(l.valor)), 0);
   
-  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .filter()
-  const parcelados = Array.isArray(lanc) ? lanc.filter((l) => l.parcelas && l.parcelas > 0) : [];
+  const parcelados = safeLanc.filter((l) => l.parcelas && l.parcelas > 0);
   const porCartao = {};
-  if (Array.isArray(parcelados)) {
-    parcelados.forEach((l) => { 
-      const c = l.cartao || "Sem cartão"; 
-      if (!porCartao[c]) porCartao[c] = []; 
-      porCartao[c].push(l); 
-    });
-  }
+  parcelados.forEach((l) => { 
+    const c = l.cartao || "Sem cartão"; 
+    if (!porCartao[c]) porCartao[c] = []; 
+    porCartao[c].push(l); 
+  });
 
   function startEdit(l) {
     setEditId(l.id);
-    setForm({ tipo: l.tipo, cat: l.cat, descricao: l.descricao || "", valor: String(l.valor), data: l.data, parcelas: l.parcelas ? String(l.parcelas) : "", parcela_atual: l.parcela_atual ? String(l.parcela_atual) : "", cartao: l.cartao || "" });
+    setForm({ 
+      tipo: l.tipo, 
+      cat: l.cat, 
+      descricao: l.descricao || "", 
+      valor: String(l.valor), 
+      data: l.data, 
+      parcelas: l.parcelas ? String(l.parcelas) : "", 
+      parcela_atual: l.parcela_atual ? String(l.parcela_atual) : "", 
+      cartao: l.cartao || "" 
+    });
     if (l.parcelas) setShowParcela(true);
     setAba("lancamentos");
   }
-  function cancelEdit() { setEditId(null); setForm({ ...BLANK }); setShowParcela(false); }
+  
+  function cancelEdit() { 
+    setEditId(null); 
+    setForm({ ...BLANK }); 
+    setShowParcela(false); 
+  }
 
   async function salvar() {
     if (!form.descricao || !form.valor || !form.data) return;
     setSaving(true);
-    const obj = { tipo: form.tipo, cat: form.cat, descricao: form.descricao, valor: parseFloat(form.valor), data: form.data, parcelas: form.parcelas ? parseInt(form.parcelas) : null, parcela_atual: form.parcela_atual ? parseInt(form.parcela_atual) : null, cartao: form.cartao || null };
+    const obj = { 
+      tipo: form.tipo, 
+      cat: form.cat, 
+      descricao: form.descricao, 
+      valor: parseFloat(form.valor), 
+      data: form.data, 
+      parcelas: form.parcelas ? parseInt(form.parcelas) : null, 
+      parcela_atual: form.parcela_atual ? parseInt(form.parcela_atual) : null, 
+      cartao: form.cartao || null 
+    };
     try {
       if (editId) {
         await sb("/lancamentos?id=eq." + editId, { method: "PATCH", token, body: obj });
@@ -266,17 +310,34 @@ function Dashboard({ session, onLogout }) {
         setLanc((prev) => [d[0], ...(Array.isArray(prev) ? prev : [])]);
         toast("Salvo!");
       }
-    } catch (e) { toast("Erro: " + e.message); }
-    setForm({ ...BLANK }); setEditId(null); setShowParcela(false); setSaving(false);
+    } catch (e) { 
+      toast("Erro: " + e.message); 
+    }
+    setForm({ ...BLANK }); 
+    setEditId(null); 
+    setShowParcela(false); 
+    setSaving(false);
   }
 
   async function duplicar(l) {
     try {
-      const obj = { tipo: l.tipo, cat: l.cat, descricao: (l.descricao || "") + " (cópia)", valor: l.valor, data: l.data, parcelas: l.parcelas, parcela_atual: l.parcela_atual ? l.parcela_atual + 1 : null, cartao: l.cartao, user_id: uid };
+      const obj = { 
+        tipo: l.tipo, 
+        cat: l.cat, 
+        descricao: (l.descricao || "") + " (cópia)", 
+        valor: l.valor, 
+        data: l.data, 
+        parcelas: l.parcelas, 
+        parcela_atual: l.parcela_atual ? l.parcela_atual + 1 : null, 
+        cartao: l.cartao, 
+        user_id: uid 
+      };
       const d = await sb("/lancamentos", { method: "POST", token, body: obj });
       setLanc((prev) => [d[0], ...(Array.isArray(prev) ? prev : [])]);
       toast("Duplicado!");
-    } catch (e) { toast("Erro: " + e.message); }
+    } catch (e) { 
+      toast("Erro: " + e.message); 
+    }
   }
 
   async function del(id) {
@@ -284,26 +345,29 @@ function Dashboard({ session, onLogout }) {
       await sb("/lancamentos?id=eq." + id, { method: "DELETE", token }); 
       setLanc((prev) => Array.isArray(prev) ? prev.filter((l) => l.id !== id) : []); 
       toast("Removido."); 
+    } catch (e) { 
+      toast("Erro: " + e.message); 
     }
-    catch (e) { toast("Erro: " + e.message); }
   }
 
   async function updMeta(id, inc) {
-    const m = Array.isArray(metas) ? metas.find((x) => x.id === id) : null;
+    const m = safeMetas.find((x) => x.id === id);
     if (!m) return;
     const novo = Math.round(Math.min(m.valor, m.atual + inc) * 100) / 100;
     try { 
       await sb("/metas?id=eq." + id, { method: "PATCH", token, body: { atual: novo } }); 
       setMetas((prev) => Array.isArray(prev) ? prev.map((x) => (x.id === id ? { ...x, atual: novo } : x)) : []); 
       toast("Atualizado!"); 
+    } catch (e) { 
+      toast("Erro: " + e.message); 
     }
-    catch (e) { toast("Erro: " + e.message); }
   }
 
   async function askAI() {
     if (!aiQ.trim()) return;
-    setAiLoad(true); setAiResp("");
-    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + (Array.isArray(parcelados) ? parcelados.length : 0) + ". Responda em português, máx 3 parágrafos.";
+    setAiLoad(true); 
+    setAiResp("");
+    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + parcelados.length + ". Responda em português, máx 3 parágrafos.";
     try { 
       const r = await fetch("https://api.anthropic.com/v1/messages", { 
         method: "POST", 
@@ -317,8 +381,9 @@ function Dashboard({ session, onLogout }) {
       }); 
       const d = await r.json(); 
       setAiResp(d.content?.[0]?.text || "Sem resposta."); 
+    } catch (e) { 
+      setAiResp("Erro: " + e.message); 
     }
-    catch (e) { setAiResp("Erro: " + e.message); }
     setAiLoad(false);
   }
 
@@ -366,7 +431,7 @@ function Dashboard({ session, onLogout }) {
                 </div>
                 <div style={crd}><div style={{ fontWeight: 600, fontSize: 13, color: C.navy, marginBottom: 12 }}>Metas</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
-                    {Array.isArray(metas) && metas.map((m) => { 
+                    {safeMetas.map((m) => { 
                       const p = Math.min(100, (m.atual / m.valor) * 100); 
                       return (<div key={m.id} style={{ background: C.slate, borderRadius: 10, padding: 10, border: "1px solid " + C.border }}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ fontSize: 11, fontWeight: 600, color: C.navy }}>{m.nome}</span><span style={{ fontSize: 11, fontWeight: 700, color: p >= 100 ? C.green : C.navy }}>{Math.round(p)}%</span></div><Bar pct={p} color={p >= 100 ? C.green : C.navy} /><div style={{ fontSize: 10, color: C.grayD, marginTop: 4 }}>{fmt(m.atual)} / {fmt(m.valor)}</div></div>); 
                     })}
@@ -393,7 +458,7 @@ function Dashboard({ session, onLogout }) {
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                   <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inp, width: "auto" }}>
-                    <option value="">Todos ({Array.isArray(lanc) ? lanc.length : 0})</option>
+                    <option value="">Todos ({safeLanc.length})</option>
                     {meses.map((m) => <option key={m} value={m}>{m}</option>)}
                   </select>
                   <span style={{ marginLeft: "auto", fontSize: 11, color: C.green }}>Entr: {fmt(lF.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0))}</span>
@@ -429,7 +494,7 @@ function Dashboard({ session, onLogout }) {
                           <td colSpan={4} style={{ padding: 8, fontWeight: 600 }}>Saldo</td>
                           <td style={{ padding: 8, fontWeight: 700, textAlign: "right", color: sP >= 0 ? C.green : C.red }}>{fmt(sP)}</td>
                           <td />
-                        </tr>
+                        <tr>
                       </tfoot>
                     </table>
                   </div>}
@@ -439,11 +504,11 @@ function Dashboard({ session, onLogout }) {
 
             {aba === "cartao" && (
               <div style={{ animation: "fadeUp .4s ease" }}>
-                <div style={{ ...crd, marginBottom: 14 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Parcelas no cartão</div><div style={{ fontSize: 12, color: C.grayD }}>{Array.isArray(parcelados) ? parcelados.length : 0} parcela(s) · Mensal: {fmt(Array.isArray(parcelados) ? parcelados.reduce((s, l) => s + Number(l.valor), 0) : 0)}</div></div>
+                <div style={{ ...crd, marginBottom: 14 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Parcelas no cartão</div><div style={{ fontSize: 12, color: C.grayD }}>{parcelados.length} parcela(s) · Mensal: {fmt(parcelados.reduce((s, l) => s + Number(l.valor), 0))}</div></div>
                 {parcelados.length === 0 ? <div style={{ ...crd, textAlign: "center", padding: "2rem", color: C.grayD, fontSize: 13 }}>Nenhuma parcela.</div> : Object.entries(porCartao).map(([cartao, items]) => (
                   <div key={cartao} style={{ ...crd, marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div><div style={{ fontWeight: 600, fontSize: 13, color: C.navy }}>{cartao}</div><div style={{ fontSize: 11, color: C.grayD }}>{items.length} item(ns)</div></div><div style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{fmt(items.reduce((s, l) => s + Number(l.valor), 0))}/mês</div></div>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ borderBottom: "2px solid " + C.border }}>{["Descrição", "Parcela", "Progresso", "Valor", "Restante"].map((h) => <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: C.grayD }}>{h}</th>)}</tr></thead><tbody>{items.map((l) => { const pa = l.parcela_atual || 1, pt = l.parcelas, pct = (pa / pt) * 100, rest = (pt - pa) * Number(l.valor); return <tr key={l.id} style={{ borderBottom: "1px solid " + C.border }}><td style={{ padding: 8, fontWeight: 500 }}>{l.descricao}</td><td style={{ padding: 8, color: C.grayD }}>{pa}/{pt}</td><td style={{ padding: 8, minWidth: 80 }}><Bar pct={pct} color={pct >= 100 ? C.green : C.purple} /></td><td style={{ padding: 8, color: C.red }}>{fmt(l.valor)}</td><td style={{ padding: 8, color: C.grayD }}>{fmt(rest)}</td></tr>; })}</tbody></table>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ borderBottom: "2px solid " + C.border }}>{["Descrição", "Parcela", "Progresso", "Valor", "Restante"].map((h) => <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: C.grayD }}>{h}</th>)}</thead><tbody>{items.map((l) => { const pa = l.parcela_atual || 1, pt = l.parcelas, pct = (pa / pt) * 100, rest = (pt - pa) * Number(l.valor); return <tr key={l.id} style={{ borderBottom: "1px solid " + C.border }}><td style={{ padding: 8, fontWeight: 500 }}>{l.descricao}</td><td style={{ padding: 8, color: C.grayD }}>{pa}/{pt}</td><td style={{ padding: 8, minWidth: 80 }}><Bar pct={pct} color={pct >= 100 ? C.green : C.purple} /></td><td style={{ padding: 8, color: C.red }}>{fmt(l.valor)}</td><td style={{ padding: 8, color: C.grayD }}>{fmt(rest)}</td></tr>; })}</tbody></table>
                   </div>
                 ))}
               </div>
@@ -451,7 +516,7 @@ function Dashboard({ session, onLogout }) {
 
             {aba === "metas" && (
               <div style={{ animation: "fadeUp .4s ease", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 12 }}>
-                {Array.isArray(metas) && metas.map((m) => { 
+                {safeMetas.map((m) => { 
                   const p = Math.min(100, (m.atual / m.valor) * 100); 
                   return (
                     <div key={m.id} style={{ ...crd, borderTop: "3px solid " + (p >= 100 ? C.green : C.navy) }}>
@@ -467,7 +532,7 @@ function Dashboard({ session, onLogout }) {
 
             {aba === "ia" && (
               <div style={{ animation: "fadeUp .4s ease" }}>
-                <div style={{ ...crd, marginBottom: 12 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Consultora IA</div><div style={{ fontSize: 11, color: C.grayD }}>{Array.isArray(lanc) ? lanc.length : 0} lançamentos · {Array.isArray(parcelados) ? parcelados.length : 0} parcelas</div></div>
+                <div style={{ ...crd, marginBottom: 12 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Consultora IA</div><div style={{ fontSize: 11, color: C.grayD }}>{safeLanc.length} lançamentos · {parcelados.length} parcelas</div></div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{["Saúde financeira", "Acelerar reserva", "Investir mais?", "Dependência CLT", "Impacto parcelas", "Financiamento?"].map((s) => <button key={s} onClick={() => setAiQ(s)} style={{ fontSize: 11, padding: "6px 12px", borderRadius: 18, border: "1px solid " + C.border, cursor: "pointer", background: C.white, color: C.navy, fontWeight: 500 }}>{s}</button>)}</div>
                 <div style={{ ...crd, marginBottom: 12, display: "flex", gap: 8 }}><input type="text" placeholder="Pergunte..." value={aiQ} onChange={(e) => setAiQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !aiLoad && askAI()} style={{ ...inp, flex: 1, borderRadius: 10, padding: "10px 14px" }} /><button onClick={askAI} disabled={aiLoad || !aiQ.trim()} style={{ ...btnP, borderRadius: 10, padding: "10px 18px" }}>{aiLoad ? <i className="ti ti-loader-2" style={{ animation: "spin 1s linear infinite" }} /> : <i className="ti ti-send" />}{aiLoad ? "..." : "Enviar"}</button></div>
                 {aiResp && !aiLoad && <div style={{ ...crd, borderLeft: "4px solid " + C.navy }}><div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 8 }}>Análise</div><div style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap", color: "#334155" }}>{aiResp}</div></div>}
