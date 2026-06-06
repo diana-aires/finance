@@ -202,15 +202,17 @@ function Dashboard({ session, onLogout }) {
       sb("/lancamentos?order=data.desc", { token }),
       sb("/metas?order=id.asc", { token }),
     ]).then(([ls, ms]) => {
-      setLanc(ls || []);
-      if (!ms || ms.length === 0) {
-        sb("/metas", { method: "POST", token, body: METAS_DEF.map((m) => ({ ...m, user_id: uid })) }).then((d) => setMetas(d || [])).catch(() => {});
+      // 🔧 CORREÇÃO: Garantir que ls e ms sejam arrays
+      setLanc(Array.isArray(ls) ? ls : []);
+      if (!ms || ms.length === 0 || !Array.isArray(ms)) {
+        sb("/metas", { method: "POST", token, body: METAS_DEF.map((m) => ({ ...m, user_id: uid })) }).then((d) => setMetas(Array.isArray(d) ? d : [])).catch(() => {});
       } else setMetas(ms);
     }).catch((e) => toast("Erro: " + e.message)).finally(() => setLoading(false));
   }, [token, uid]);
 
-  const rec = lanc.filter((l) => l.tipo === "receita");
-  const desp = lanc.filter((l) => l.tipo === "despesa");
+  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .filter()
+  const rec = Array.isArray(lanc) ? lanc.filter((l) => l.tipo === "receita") : [];
+  const desp = Array.isArray(lanc) ? lanc.filter((l) => l.tipo === "despesa") : [];
   const tR = rec.reduce((s, l) => s + Number(l.valor), 0);
   const tD = desp.reduce((s, l) => s + Number(l.valor), 0);
   const saldo = tR - tD;
@@ -223,12 +225,24 @@ function Dashboard({ session, onLogout }) {
   const txI = tR > 0 ? inv / tR : 0;
   const dC = tR > 0 ? rF / tR : 0;
   const cFx = tR > 0 ? dF / tR : 0;
-  const meses = [...new Set(lanc.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse();
-  const lF = filtro ? lanc.filter((l) => l.data?.startsWith(filtro)) : lanc;
+  
+  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .map()
+  const meses = Array.isArray(lanc) ? [...new Set(lanc.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse() : [];
+  
+  // 🔧 CORREÇÃO: Garantir que lanc é array antes de filtrar
+  const lF = Array.isArray(lanc) && filtro ? lanc.filter((l) => l.data?.startsWith(filtro)) : (Array.isArray(lanc) ? lanc : []);
   const sP = lF.reduce((s, l) => (l.tipo === "receita" ? s + Number(l.valor) : s - Number(l.valor)), 0);
-  const parcelados = lanc.filter((l) => l.parcelas && l.parcelas > 0);
+  
+  // 🔧 CORREÇÃO: Garantir que lanc é array antes de usar .filter()
+  const parcelados = Array.isArray(lanc) ? lanc.filter((l) => l.parcelas && l.parcelas > 0) : [];
   const porCartao = {};
-  parcelados.forEach((l) => { const c = l.cartao || "Sem cartão"; if (!porCartao[c]) porCartao[c] = []; porCartao[c].push(l); });
+  if (Array.isArray(parcelados)) {
+    parcelados.forEach((l) => { 
+      const c = l.cartao || "Sem cartão"; 
+      if (!porCartao[c]) porCartao[c] = []; 
+      porCartao[c].push(l); 
+    });
+  }
 
   function startEdit(l) {
     setEditId(l.id);
@@ -245,11 +259,11 @@ function Dashboard({ session, onLogout }) {
     try {
       if (editId) {
         await sb("/lancamentos?id=eq." + editId, { method: "PATCH", token, body: obj });
-        setLanc((prev) => prev.map((l) => (l.id === editId ? { ...l, ...obj } : l)));
+        setLanc((prev) => Array.isArray(prev) ? prev.map((l) => (l.id === editId ? { ...l, ...obj } : l)) : []);
         toast("Atualizado!");
       } else {
         const d = await sb("/lancamentos", { method: "POST", token, body: { ...obj, user_id: uid } });
-        setLanc((prev) => [d[0], ...prev]);
+        setLanc((prev) => [d[0], ...(Array.isArray(prev) ? prev : [])]);
         toast("Salvo!");
       }
     } catch (e) { toast("Erro: " + e.message); }
@@ -260,28 +274,50 @@ function Dashboard({ session, onLogout }) {
     try {
       const obj = { tipo: l.tipo, cat: l.cat, descricao: (l.descricao || "") + " (cópia)", valor: l.valor, data: l.data, parcelas: l.parcelas, parcela_atual: l.parcela_atual ? l.parcela_atual + 1 : null, cartao: l.cartao, user_id: uid };
       const d = await sb("/lancamentos", { method: "POST", token, body: obj });
-      setLanc((prev) => [d[0], ...prev]);
+      setLanc((prev) => [d[0], ...(Array.isArray(prev) ? prev : [])]);
       toast("Duplicado!");
     } catch (e) { toast("Erro: " + e.message); }
   }
 
   async function del(id) {
-    try { await sb("/lancamentos?id=eq." + id, { method: "DELETE", token }); setLanc((prev) => prev.filter((l) => l.id !== id)); toast("Removido."); }
+    try { 
+      await sb("/lancamentos?id=eq." + id, { method: "DELETE", token }); 
+      setLanc((prev) => Array.isArray(prev) ? prev.filter((l) => l.id !== id) : []); 
+      toast("Removido."); 
+    }
     catch (e) { toast("Erro: " + e.message); }
   }
 
   async function updMeta(id, inc) {
-    const m = metas.find((x) => x.id === id); if (!m) return;
+    const m = Array.isArray(metas) ? metas.find((x) => x.id === id) : null;
+    if (!m) return;
     const novo = Math.round(Math.min(m.valor, m.atual + inc) * 100) / 100;
-    try { await sb("/metas?id=eq." + id, { method: "PATCH", token, body: { atual: novo } }); setMetas((prev) => prev.map((x) => (x.id === id ? { ...x, atual: novo } : x))); toast("Atualizado!"); }
+    try { 
+      await sb("/metas?id=eq." + id, { method: "PATCH", token, body: { atual: novo } }); 
+      setMetas((prev) => Array.isArray(prev) ? prev.map((x) => (x.id === id ? { ...x, atual: novo } : x)) : []); 
+      toast("Atualizado!"); 
+    }
     catch (e) { toast("Erro: " + e.message); }
   }
 
   async function askAI() {
     if (!aiQ.trim()) return;
     setAiLoad(true); setAiResp("");
-    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + parcelados.length + ". Responda em português, máx 3 parágrafos.";
-    try { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: sys, messages: [{ role: "user", content: aiQ }] }) }); const d = await r.json(); setAiResp(d.content?.[0]?.text || "Sem resposta."); }
+    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + (Array.isArray(parcelados) ? parcelados.length : 0) + ". Responda em português, máx 3 parágrafos.";
+    try { 
+      const r = await fetch("https://api.anthropic.com/v1/messages", { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify({ 
+          model: "claude-sonnet-4-20250514", 
+          max_tokens: 1000, 
+          system: sys, 
+          messages: [{ role: "user", content: aiQ }] 
+        }) 
+      }); 
+      const d = await r.json(); 
+      setAiResp(d.content?.[0]?.text || "Sem resposta."); 
+    }
     catch (e) { setAiResp("Erro: " + e.message); }
     setAiLoad(false);
   }
@@ -329,7 +365,12 @@ function Dashboard({ session, onLogout }) {
                   </div>
                 </div>
                 <div style={crd}><div style={{ fontWeight: 600, fontSize: 13, color: C.navy, marginBottom: 12 }}>Metas</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>{metas.map((m) => { const p = Math.min(100, (m.atual / m.valor) * 100); return (<div key={m.id} style={{ background: C.slate, borderRadius: 10, padding: 10, border: "1px solid " + C.border }}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ fontSize: 11, fontWeight: 600, color: C.navy }}>{m.nome}</span><span style={{ fontSize: 11, fontWeight: 700, color: p >= 100 ? C.green : C.navy }}>{Math.round(p)}%</span></div><Bar pct={p} color={p >= 100 ? C.green : C.navy} /><div style={{ fontSize: 10, color: C.grayD, marginTop: 4 }}>{fmt(m.atual)} / {fmt(m.valor)}</div></div>); })}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+                    {Array.isArray(metas) && metas.map((m) => { 
+                      const p = Math.min(100, (m.atual / m.valor) * 100); 
+                      return (<div key={m.id} style={{ background: C.slate, borderRadius: 10, padding: 10, border: "1px solid " + C.border }}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ fontSize: 11, fontWeight: 600, color: C.navy }}>{m.nome}</span><span style={{ fontSize: 11, fontWeight: 700, color: p >= 100 ? C.green : C.navy }}>{Math.round(p)}%</span></div><Bar pct={p} color={p >= 100 ? C.green : C.navy} /><div style={{ fontSize: 10, color: C.grayD, marginTop: 4 }}>{fmt(m.atual)} / {fmt(m.valor)}</div></div>); 
+                    })}
+                  </div>
                 </div>
               </div>
             )}
@@ -351,17 +392,54 @@ function Dashboard({ session, onLogout }) {
                   <button onClick={salvar} disabled={saving} style={{ ...btnP, padding: "9px 20px", borderRadius: 10 }}>{saving ? <i className="ti ti-loader-2" style={{ animation: "spin 1s linear infinite" }} /> : <i className={"ti " + (editId ? "ti-check" : "ti-device-floppy")} />}{editId ? "Atualizar" : "Salvar"}</button>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-                  <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inp, width: "auto" }}><option value="">Todos ({lanc.length})</option>{meses.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+                  <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inp, width: "auto" }}>
+                    <option value="">Todos ({Array.isArray(lanc) ? lanc.length : 0})</option>
+                    {meses.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
                   <span style={{ marginLeft: "auto", fontSize: 11, color: C.green }}>Entr: {fmt(lF.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0))}</span>
                   <span style={{ fontSize: 11, color: C.red }}>Saíd: {fmt(lF.filter((l) => l.tipo === "despesa").reduce((s, l) => s + Number(l.valor), 0))}</span>
                 </div>
-                <div style={crd}>{lF.length === 0 ? <div style={{ textAlign: "center", padding: "2rem", color: C.grayD, fontSize: 13 }}>Nenhum lançamento.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: "2px solid " + C.border }}>{["Data", "Descrição", "Categoria", "Parcela", "Valor", "Ações"].map((h) => <th key={h} style={{ textAlign: "left", padding: "7px 8px", fontWeight: 600, color: C.grayD }}>{h}</th>)}</tr></thead><tbody>{lF.map((l) => <tr key={l.id} className="row-hover" style={{ borderBottom: "1px solid " + C.border }}><td style={{ padding: 8, color: C.grayD }}>{l.data?.split("-").reverse().join("/")}</td><td style={{ padding: 8, fontWeight: 500 }}>{l.descricao}</td><td style={{ padding: 8 }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: l.tipo === "receita" ? "#ECFDF5" : "#FEF2F2", color: l.tipo === "receita" ? C.greenD : C.red }}>{l.cat}</span></td><td style={{ padding: 8, fontSize: 10, color: C.grayD }}>{l.parcelas ? (l.parcela_atual || 1) + "/" + l.parcelas : "—"}</td><td style={{ padding: 8, fontWeight: 700, color: l.tipo === "receita" ? C.green : C.red, textAlign: "right" }}>{l.tipo === "despesa" ? "-" : ""}{fmt(l.valor)}</td><td style={{ padding: 8 }}><button onClick={() => startEdit(l)} style={btnI}><i className="ti ti-edit" style={{ fontSize: 13, color: C.navy }} /></button><button onClick={() => duplicar(l)} style={btnI}><i className="ti ti-copy" style={{ fontSize: 13, color: C.purple }} /></button><button onClick={() => del(l.id)} style={btnI}><i className="ti ti-trash" style={{ fontSize: 13, color: C.red }} /></button></td></tr>)}</tbody><tfoot><tr style={{ borderTop: "2px solid " + C.border }}><td colSpan={4} style={{ padding: 8, fontWeight: 600 }}>Saldo</td><td style={{ padding: 8, fontWeight: 700, textAlign: "right", color: sP >= 0 ? C.green : C.red }}>{fmt(sP)}</td><td /></tr></tfoot></table></div>}</div>
+                <div style={crd}>
+                  {lF.length === 0 ? <div style={{ textAlign: "center", padding: "2rem", color: C.grayD, fontSize: 13 }}>Nenhum lançamento.</div> : 
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "2px solid " + C.border }}>
+                          {["Data", "Descrição", "Categoria", "Parcela", "Valor", "Ações"].map((h) => <th key={h} style={{ textAlign: "left", padding: "7px 8px", fontWeight: 600, color: C.grayD }}>{h}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lF.map((l) => (
+                          <tr key={l.id} className="row-hover" style={{ borderBottom: "1px solid " + C.border }}>
+                            <td style={{ padding: 8, color: C.grayD }}>{l.data?.split("-").reverse().join("/")}</td>
+                            <td style={{ padding: 8, fontWeight: 500 }}>{l.descricao}</td>
+                            <td style={{ padding: 8 }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: l.tipo === "receita" ? "#ECFDF5" : "#FEF2F2", color: l.tipo === "receita" ? C.greenD : C.red }}>{l.cat}</span></td>
+                            <td style={{ padding: 8, fontSize: 10, color: C.grayD }}>{l.parcelas ? (l.parcela_atual || 1) + "/" + l.parcelas : "—"}</td>
+                            <td style={{ padding: 8, fontWeight: 700, color: l.tipo === "receita" ? C.green : C.red, textAlign: "right" }}>{l.tipo === "despesa" ? "-" : ""}{fmt(l.valor)}</td>
+                            <td style={{ padding: 8 }}>
+                              <button onClick={() => startEdit(l)} style={btnI}><i className="ti ti-edit" style={{ fontSize: 13, color: C.navy }} /></button>
+                              <button onClick={() => duplicar(l)} style={btnI}><i className="ti ti-copy" style={{ fontSize: 13, color: C.purple }} /></button>
+                              <button onClick={() => del(l.id)} style={btnI}><i className="ti ti-trash" style={{ fontSize: 13, color: C.red }} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ borderTop: "2px solid " + C.border }}>
+                          <td colSpan={4} style={{ padding: 8, fontWeight: 600 }}>Saldo</td>
+                          <td style={{ padding: 8, fontWeight: 700, textAlign: "right", color: sP >= 0 ? C.green : C.red }}>{fmt(sP)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>}
+                </div>
               </div>
             )}
 
             {aba === "cartao" && (
               <div style={{ animation: "fadeUp .4s ease" }}>
-                <div style={{ ...crd, marginBottom: 14 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Parcelas no cartão</div><div style={{ fontSize: 12, color: C.grayD }}>{parcelados.length} parcela(s) · Mensal: {fmt(parcelados.reduce((s, l) => s + Number(l.valor), 0))}</div></div>
+                <div style={{ ...crd, marginBottom: 14 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Parcelas no cartão</div><div style={{ fontSize: 12, color: C.grayD }}>{Array.isArray(parcelados) ? parcelados.length : 0} parcela(s) · Mensal: {fmt(Array.isArray(parcelados) ? parcelados.reduce((s, l) => s + Number(l.valor), 0) : 0)}</div></div>
                 {parcelados.length === 0 ? <div style={{ ...crd, textAlign: "center", padding: "2rem", color: C.grayD, fontSize: 13 }}>Nenhuma parcela.</div> : Object.entries(porCartao).map(([cartao, items]) => (
                   <div key={cartao} style={{ ...crd, marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div><div style={{ fontWeight: 600, fontSize: 13, color: C.navy }}>{cartao}</div><div style={{ fontSize: 11, color: C.grayD }}>{items.length} item(ns)</div></div><div style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{fmt(items.reduce((s, l) => s + Number(l.valor), 0))}/mês</div></div>
@@ -373,20 +451,23 @@ function Dashboard({ session, onLogout }) {
 
             {aba === "metas" && (
               <div style={{ animation: "fadeUp .4s ease", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 12 }}>
-                {metas.map((m) => { const p = Math.min(100, (m.atual / m.valor) * 100); return (
-                  <div key={m.id} style={{ ...crd, borderTop: "3px solid " + (p >= 100 ? C.green : C.navy) }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>{m.nome}</div><div style={{ fontSize: 11, color: C.grayD }}>{m.prazo}</div></div><div style={{ fontSize: 18, fontWeight: 700, color: p >= 100 ? C.green : C.navy }}>{Math.round(p)}%</div></div>
-                    <Bar pct={p} color={p >= 100 ? C.green : C.navy} />
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.grayD, margin: "8px 0 12px" }}><span>{fmt(m.atual)}</span><span>Meta: {fmt(m.valor)}</span></div>
-                    <div style={{ display: "flex", gap: 6 }}><input type="number" min="0" id={"mi-" + m.id} placeholder="Valor" style={{ ...inp, flex: 1 }} /><button onClick={() => { const el = document.getElementById("mi-" + m.id); const v = parseFloat(el.value); if (!isNaN(v) && v > 0) { updMeta(m.id, v); el.value = ""; } }} style={btnP}>Aportar</button></div>
-                  </div>
-                ); })}
+                {Array.isArray(metas) && metas.map((m) => { 
+                  const p = Math.min(100, (m.atual / m.valor) * 100); 
+                  return (
+                    <div key={m.id} style={{ ...crd, borderTop: "3px solid " + (p >= 100 ? C.green : C.navy) }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>{m.nome}</div><div style={{ fontSize: 11, color: C.grayD }}>{m.prazo}</div></div><div style={{ fontSize: 18, fontWeight: 700, color: p >= 100 ? C.green : C.navy }}>{Math.round(p)}%</div></div>
+                      <Bar pct={p} color={p >= 100 ? C.green : C.navy} />
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.grayD, margin: "8px 0 12px" }}><span>{fmt(m.atual)}</span><span>Meta: {fmt(m.valor)}</span></div>
+                      <div style={{ display: "flex", gap: 6 }}><input type="number" min="0" id={"mi-" + m.id} placeholder="Valor" style={{ ...inp, flex: 1 }} /><button onClick={() => { const el = document.getElementById("mi-" + m.id); const v = parseFloat(el.value); if (!isNaN(v) && v > 0) { updMeta(m.id, v); el.value = ""; } }} style={btnP}>Aportar</button></div>
+                    </div>
+                  ); 
+                })}
               </div>
             )}
 
             {aba === "ia" && (
               <div style={{ animation: "fadeUp .4s ease" }}>
-                <div style={{ ...crd, marginBottom: 12 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Consultora IA</div><div style={{ fontSize: 11, color: C.grayD }}>{lanc.length} lançamentos · {parcelados.length} parcelas</div></div>
+                <div style={{ ...crd, marginBottom: 12 }}><div style={{ fontWeight: 600, fontSize: 14, color: C.navy }}>Consultora IA</div><div style={{ fontSize: 11, color: C.grayD }}>{Array.isArray(lanc) ? lanc.length : 0} lançamentos · {Array.isArray(parcelados) ? parcelados.length : 0} parcelas</div></div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{["Saúde financeira", "Acelerar reserva", "Investir mais?", "Dependência CLT", "Impacto parcelas", "Financiamento?"].map((s) => <button key={s} onClick={() => setAiQ(s)} style={{ fontSize: 11, padding: "6px 12px", borderRadius: 18, border: "1px solid " + C.border, cursor: "pointer", background: C.white, color: C.navy, fontWeight: 500 }}>{s}</button>)}</div>
                 <div style={{ ...crd, marginBottom: 12, display: "flex", gap: 8 }}><input type="text" placeholder="Pergunte..." value={aiQ} onChange={(e) => setAiQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !aiLoad && askAI()} style={{ ...inp, flex: 1, borderRadius: 10, padding: "10px 14px" }} /><button onClick={askAI} disabled={aiLoad || !aiQ.trim()} style={{ ...btnP, borderRadius: 10, padding: "10px 18px" }}>{aiLoad ? <i className="ti ti-loader-2" style={{ animation: "spin 1s linear infinite" }} /> : <i className="ti ti-send" />}{aiLoad ? "..." : "Enviar"}</button></div>
                 {aiResp && !aiLoad && <div style={{ ...crd, borderLeft: "4px solid " + C.navy }}><div style={{ fontSize: 13, fontWeight: 600, color: C.navy, marginBottom: 8 }}>Análise</div><div style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap", color: "#334155" }}>{aiResp}</div></div>}
