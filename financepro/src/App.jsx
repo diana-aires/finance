@@ -79,7 +79,13 @@ async function sb(path, opts = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const txt = await r.text();
-  return txt ? JSON.parse(txt) : null;
+  const data = txt ? JSON.parse(txt) : null;
+  // Se o HTTP não é OK, lança erro com a mensagem do Supabase
+  if (!r.ok) {
+    const msg = (data && typeof data === "object") ? (data.message || data.error || data.msg || JSON.stringify(data)) : "Erro " + r.status;
+    throw new Error(msg);
+  }
+  return data;
 }
 
 /* ── O restante do código permanece idêntico ── */
@@ -266,7 +272,8 @@ function Dashboard({ session, onLogout }) {
       }).catch((e) => toast("Erro: " + e.message)).finally(() => setLoading(false));
   }, [token, uid]);
 
-  const rec = lanc.filter((l) => l.tipo === "receita"), desp = lanc.filter((l) => l.tipo === "despesa");
+  const safeL = Array.isArray(lanc) ? lanc : [];
+  const rec = safeL.filter((l) => l.tipo === "receita"), desp = safeL.filter((l) => l.tipo === "despesa");
   const tR = rec.reduce((s, l) => s + Number(l.valor), 0), tD = desp.reduce((s, l) => s + Number(l.valor), 0), saldo = tR - tD;
   const rF = rec.filter((l) => TIPO_R[l.cat] === "fixa").reduce((s, l) => s + Number(l.valor), 0);
   const rV = rec.filter((l) => TIPO_R[l.cat] === "variavel").reduce((s, l) => s + Number(l.valor), 0);
@@ -274,10 +281,11 @@ function Dashboard({ session, onLogout }) {
   const inv = desp.filter((l) => l.cat === "Investimento").reduce((s, l) => s + Number(l.valor), 0);
   const fin = desp.filter((l) => l.cat === "Financiamento").reduce((s, l) => s + Number(l.valor), 0);
   const txP = tR > 0 ? saldo / tR : 0, txI = tR > 0 ? inv / tR : 0, dC = tR > 0 ? rF / tR : 0, cFx = tR > 0 ? dF / tR : 0;
-  const meses = [...new Set(lanc.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse();
-  const lF = filtro ? lanc.filter((l) => l.data?.startsWith(filtro)) : lanc;
+  const meses = [...new Set(safeL.map((l) => l.data?.slice(0, 7)).filter(Boolean))].sort().reverse();
+  const lF = filtro ? safeL.filter((l) => l.data?.startsWith(filtro)) : safeL;
   const sP = lF.reduce((s, l) => (l.tipo === "receita" ? s + Number(l.valor) : s - Number(l.valor)), 0);
-  const parcelados = lanc.filter((l) => l.parcelas && l.parcelas > 0);
+  const parcelados = safeL.filter((l) => l.parcelas && l.parcelas > 0);
+  const safeMetas = Array.isArray(metas) ? metas : [];
   const porCartao = {};
   parcelados.forEach((l) => { const c = l.cartao || "Sem cartão"; if (!porCartao[c]) porCartao[c] = []; porCartao[c].push(l); });
 
@@ -289,19 +297,19 @@ function Dashboard({ session, onLogout }) {
     setSaving(true);
     const obj = { tipo: form.tipo, cat: form.cat, descricao: form.descricao, valor: parseFloat(form.valor), data: form.data, parcelas: form.parcelas ? parseInt(form.parcelas) : null, parcela_atual: form.parcela_atual ? parseInt(form.parcela_atual) : null, cartao: form.cartao || null };
     try {
-      if (editId) { await sb("/lancamentos?id=eq." + editId, { method: "PATCH", token, body: obj }); setLanc((p) => p.map((l) => (l.id === editId ? { ...l, ...obj } : l))); toast("Atualizado!"); }
-      else { const d = await sb("/lancamentos", { method: "POST", token, body: { ...obj, user_id: uid } }); if (Array.isArray(d) && d[0]) setLanc((p) => [d[0], ...p]); toast("Salvo!"); }
+      if (editId) { await sb("/lancamentos?id=eq." + editId, { method: "PATCH", token, body: obj }); setLanc((p) => (Array.isArray(p) ? p : []).map((l) => (l.id === editId ? { ...l, ...obj } : l))); toast("Atualizado!"); }
+      else { const d = await sb("/lancamentos", { method: "POST", token, body: { ...obj, user_id: uid } }); if (Array.isArray(d) && d[0]) setLanc((p) => [d[0], ...(Array.isArray(p) ? p : [])]); toast("Salvo!"); }
     } catch (e) { toast("Erro: " + e.message); }
     setForm({ ...BLANK }); setEditId(null); setShowParcela(false); setSaving(false);
   }
 
-  async function duplicar(l) { try { const d = await sb("/lancamentos", { method: "POST", token, body: { tipo: l.tipo, cat: l.cat, descricao: (l.descricao || "") + " (cópia)", valor: l.valor, data: l.data, parcelas: l.parcelas, parcela_atual: l.parcela_atual ? l.parcela_atual + 1 : null, cartao: l.cartao, user_id: uid } }); if (Array.isArray(d) && d[0]) setLanc((p) => [d[0], ...p]); toast("Duplicado!"); } catch (e) { toast("Erro: " + e.message); } }
-  async function del(id) { try { await sb("/lancamentos?id=eq." + id, { method: "DELETE", token }); setLanc((p) => p.filter((l) => l.id !== id)); toast("Removido."); } catch (e) { toast("Erro: " + e.message); } }
-  async function updMeta(id, inc) { const m = metas.find((x) => x.id === id); if (!m) return; const n = Math.round(Math.min(m.valor, m.atual + inc) * 100) / 100; try { await sb("/metas?id=eq." + id, { method: "PATCH", token, body: { atual: n } }); setMetas((p) => p.map((x) => (x.id === id ? { ...x, atual: n } : x))); toast("Atualizado!"); } catch (e) { toast("Erro: " + e.message); } }
+  async function duplicar(l) { try { const d = await sb("/lancamentos", { method: "POST", token, body: { tipo: l.tipo, cat: l.cat, descricao: (l.descricao || "") + " (cópia)", valor: l.valor, data: l.data, parcelas: l.parcelas, parcela_atual: l.parcela_atual ? l.parcela_atual + 1 : null, cartao: l.cartao, user_id: uid } }); if (Array.isArray(d) && d[0]) setLanc((p) => [d[0], ...(Array.isArray(p) ? p : [])]); toast("Duplicado!"); } catch (e) { toast("Erro: " + e.message); } }
+  async function del(id) { try { await sb("/lancamentos?id=eq." + id, { method: "DELETE", token }); setLanc((p) => (Array.isArray(p) ? p : []).filter((l) => l.id !== id)); toast("Removido."); } catch (e) { toast("Erro: " + e.message); } }
+  async function updMeta(id, inc) { const m = safeMetas.find((x) => x.id === id); if (!m) return; const n = Math.round(Math.min(m.valor, m.atual + inc) * 100) / 100; try { await sb("/metas?id=eq." + id, { method: "PATCH", token, body: { atual: n } }); setMetas((p) => (Array.isArray(p) ? p : []).map((x) => (x.id === id ? { ...x, atual: n } : x))); toast("Atualizado!"); } catch (e) { toast("Erro: " + e.message); } }
 
   async function askAI() {
     if (!aiQ.trim()) return; setAiLoad(true); setAiResp("");
-    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + parcelados.length + ". Português, máx 3 parágrafos.";
+    const sys = "Consultor financeiro. Receita " + fmt(tR) + ", CLT " + fmt(rF) + ", variável " + fmt(rV) + ", despesas " + fmt(tD) + ", saldo " + fmt(saldo) + ", poupança " + fmtPct(txP) + ", invest " + fmtPct(txI) + ", fixas " + fmtPct(cFx) + ", CLT " + fmtPct(dC) + ", financiamento " + fmt(fin) + ", parcelas " + parcelados.length + ". Metas: " + safeMetas.map((m) => m.nome + "(" + Math.round(Math.min(100, (m.atual / m.valor) * 100)) + "%)").join(",") + ". Português, máx 3 parágrafos.";
     try { const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: sys, messages: [{ role: "user", content: aiQ }] }) }); const d = await r.json(); setAiResp(d.content?.[0]?.text || "Sem resposta."); } catch (e) { setAiResp("Erro: " + e.message); }
     setAiLoad(false);
   }
@@ -346,7 +354,7 @@ function Dashboard({ session, onLogout }) {
             </div>
             <button onClick={salvar} disabled={saving} style={{ ...btnP, padding: "9px 20px", borderRadius: 10 }}>{saving ? <i className="ti ti-loader-2" style={{ animation: "spin 1s linear infinite" }} /> : <i className={"ti " + (editId ? "ti-check" : "ti-device-floppy")} />}{editId ? "Atualizar" : "Salvar"}</button>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}><select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inp, width: "auto" }}><option value="">Todos ({lanc.length})</option>{meses.map((m) => <option key={m} value={m}>{m}</option>)}</select><span style={{ marginLeft: "auto", fontSize: 11, color: C.green }}>Entr: {fmt(lF.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0))}</span><span style={{ fontSize: 11, color: C.red }}>Saíd: {fmt(lF.filter((l) => l.tipo === "despesa").reduce((s, l) => s + Number(l.valor), 0))}</span></div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inp, width: "auto" }}><option value="">Todos ({safeL.length})</option>{meses.map((m) => <option key={m} value={m}>{m}</option>)}</select><span style={{ marginLeft: "auto", fontSize: 11, color: C.green }}>Entr: {fmt(lF.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0))}</span><span style={{ fontSize: 11, color: C.red }}>Saíd: {fmt(lF.filter((l) => l.tipo === "despesa").reduce((s, l) => s + Number(l.valor), 0))}</span></div>
           <div style={crd}>{lF.length === 0 ? <div style={{ textAlign: "center", padding: "2rem", color: C.grayD, fontSize: 13 }}>Nenhum lançamento.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: "2px solid " + C.border }}>{["Data", "Descrição", "Categoria", "Parcela", "Valor", "Ações"].map((h) => <th key={h} style={{ textAlign: "left", padding: "7px 8px", fontWeight: 600, color: C.grayD }}>{h}</th>)}</tr></thead><tbody>{lF.map((l) => <tr key={l.id} className="row-hover" style={{ borderBottom: "1px solid " + C.border }}><td style={{ padding: 8, color: C.grayD }}>{l.data?.split("-").reverse().join("/")}</td><td style={{ padding: 8, fontWeight: 500 }}>{l.descricao}</td><td style={{ padding: 8 }}><span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: l.tipo === "receita" ? "#ECFDF5" : "#FEF2F2", color: l.tipo === "receita" ? C.greenD : C.red }}>{l.cat}</span></td><td style={{ padding: 8, fontSize: 10, color: C.grayD }}>{l.parcelas ? (l.parcela_atual || 1) + "/" + l.parcelas : "—"}</td><td style={{ padding: 8, fontWeight: 700, color: l.tipo === "receita" ? C.green : C.red, textAlign: "right" }}>{l.tipo === "despesa" ? "-" : ""}{fmt(l.valor)}</td><td style={{ padding: 8 }}><button onClick={() => startEdit(l)} style={btnI}><i className="ti ti-edit" style={{ fontSize: 13, color: C.navy }} /></button><button onClick={() => duplicar(l)} style={btnI}><i className="ti ti-copy" style={{ fontSize: 13, color: C.purple }} /></button><button onClick={() => del(l.id)} style={btnI}><i className="ti ti-trash" style={{ fontSize: 13, color: C.red }} /></button></td></tr>)}</tbody><tfoot><tr style={{ borderTop: "2px solid " + C.border }}><td colSpan={4} style={{ padding: 8, fontWeight: 600 }}>Saldo</td><td style={{ padding: 8, fontWeight: 700, textAlign: "right", color: sP >= 0 ? C.green : C.red }}>{fmt(sP)}</td><td /></tr></tfoot></table></div>}</div>
         </div>}
 
